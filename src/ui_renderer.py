@@ -143,7 +143,14 @@ class UIRenderer:
         self.stdscr.addstr(f" {self.format_duration(elapsed)}", curses.color_pair(4))
         self.stdscr.addstr("/", curses.color_pair(7) | curses.A_DIM)
         self.stdscr.addstr(f"{self.format_duration(total)}", curses.color_pair(7))
-        self.stdscr.addstr(f" Vol: {player.volume}%", curses.color_pair(6) | curses.A_DIM)
+        
+        # Mostrar volume e player backend
+        backend_indicator = "⚡" if player.player_backend == "mpv" else "🔊"
+        self.stdscr.addstr(f" {backend_indicator} Vol: {player.volume}%", curses.color_pair(6) | curses.A_DIM)
+        
+        # Indicar se é tempo real ou não
+        if player.player_backend == "mpv":
+            self.stdscr.addstr(" [RT]", curses.color_pair(3) | curses.A_DIM)
 
     def draw_help(self, y: int, section: int, fuzzy_mode: bool, tag_multiselect: bool) -> None:
         """Draw the help text."""
