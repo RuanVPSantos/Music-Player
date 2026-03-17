@@ -4,7 +4,41 @@
 
 Este documento descreve a arquitetura de sincronização multi-plataforma para o Music Player. O sistema foi projetado com **Offline-First**, onde o backend é **opcional** e serve apenas para sincronizar dados entre dispositivos.
 
-## 🎯 Princípios Fundamentais
+## 🏗️ Estrutura Modular do Projeto
+
+O projeto Python TUI foi refatorado em módulos independentes seguindo princípios de POO:
+
+```
+player/
+├── player.py              # Ponto de entrada da aplicação
+├── src/                   # Código fonte modular
+│   ├── __init__.py
+│   ├── main.py           # PlayerApp - aplicação principal
+│   ├── config.py         # Constantes e caminhos (DB_PATH, SONGS_DIR, etc.)
+│   ├── models.py         # Dataclasses (Music, Playlist, Tag, SyncPlaylist)
+│   ├── repository.py     # Repository - operações de banco de dados
+│   ├── audio_player.py   # AudioPlayer - controle de reprodução (ffplay)
+│   ├── download_manager.py  # DownloadManager - downloads via yt-dlp
+│   ├── sync_manager.py   # SyncManager - sincronização de playlists
+│   ├── ui_renderer.py    # UIRenderer - renderização curses
+│   ├── handlers.py       # KeyHandlers - tratamento de teclas
+│   └── utils.py          # FileUtils - funções utilitárias
+├── docs/                  # Documentação
+│   ├── README.md
+│   ├── SYNC_ARCHITECTURE.md
+│   └── MODULARIDADE_EXEMPLO.md
+├── songs/                 # Arquivos de música (MP3)
+├── thumbnails/            # Miniaturas
+└── player.db             # Banco de dados SQLite
+```
+
+### Benefícios da Modularização
+- ✅ **Baixo acoplamento**: Cada módulo pode ser substituído independentemente
+- ✅ **Alta coesão**: Responsabilidades bem definidas
+- ✅ **Testabilidade**: Classes podem ser testadas isoladamente
+- ✅ **Manutenibilidade**: Fácil localizar e modificar funcionalidades
+
+## � Princípios Fundamentais
 
 ### ✅ Offline-First
 - **App funciona 100% sem internet**
@@ -22,7 +56,7 @@ Este documento descreve a arquitetura de sincronização multi-plataforma para o
 
 ### **Banco Local (SQLite/IndexedDB)**
 
-Já implementado no `app.py`:
+Já implementado no módulo `repository.py` (classe `Repository`):
 
 ```sql
 -- Configuração de sincronização (opcional)
@@ -180,22 +214,48 @@ GET    /api/sync/pull    // Cliente puxa mudanças desde timestamp
 
 ### **1. Cliente Python (TUI)**
 
-Criar arquivo `sync_manager.py`:
+**Status:** ✅ Parcialmente implementado
+
+O módulo `sync_manager.py` já existe e implementa a sincronização de playlists do YouTube via yt-dlp.
+
+**Estrutura atual:**
+```python
+# sync_manager.py
+class SyncManager:
+    """Manages synchronization of playlists from external sources."""
+    
+    def __init__(self, status_queue: queue.Queue, download_manager: DownloadManager):
+        self.status_queue = status_queue
+        self.download_manager = download_manager
+
+    def sync_playlists_async(self) -> None:
+        """Start playlist synchronization in background thread."""
+        # Implementa sincronização de URLs do YouTube
+        # Baixa metadados e delega downloads para DownloadManager
+```
+
+**Integração no app:**
+```python
+# src/main.py - classe PlayerApp
+def __init__(self, stdscr: curses.window):
+    # ...
+    self.download_manager = DownloadManager(self.status_queue)
+    self.sync_manager = SyncManager(self.status_queue, self.download_manager)
+    # ...
+    self._auto_sync()  # Sincroniza automaticamente no startup
+```
+
+**Para adicionar sync com backend (futuro):**
+
+Expandir `sync_manager.py` com métodos adicionais:
 
 ```python
-import requests
-import json
-from typing import Optional
-from pathlib import Path
-from datetime import datetime
-
+# Adicionar ao sync_manager.py
 class SyncManager:
-    def __init__(self, repo):
-        self.repo = repo
-        self.config = self._load_config()
+    # ... métodos existentes ...
     
-    def _load_config(self) -> dict:
-        """Carrega configuração de sync do banco."""
+    def _load_backend_config(self) -> dict:
+        """Carrega configuração de sync com backend."""
         row = self.repo.conn.execute(
             "SELECT enabled, backend_url, api_key, last_sync FROM sync_config WHERE id = 1"
         ).fetchone()
@@ -209,119 +269,26 @@ class SyncManager:
             }
         return {'enabled': False}
     
-    def is_enabled(self) -> bool:
-        """Verifica se sync está habilitado."""
-        return self.config.get('enabled', False) and self.config.get('backend_url')
-    
-    def try_sync(self) -> None:
-        """Tenta sincronizar. Falha silenciosa se offline."""
-        if not self.is_enabled():
+    def sync_with_backend(self) -> None:
+        """Sincroniza tags e playlists personalizadas com backend."""
+        config = self._load_backend_config()
+        if not config.get('enabled'):
             return
         
         try:
-            # Verifica conexão
-            response = requests.get(
-                f"{self.config['backend_url']}/api/health",
-                timeout=3
-            )
-            if not response.ok:
-                return
+            import requests
             
             # Push mudanças locais
-            self.push_queue()
+            self._push_queue(config)
             
             # Pull mudanças remotas
-            self.pull_changes()
+            self._pull_changes(config)
             
-            # Atualiza timestamp
-            self.repo.conn.execute(
-                "UPDATE sync_config SET last_sync = ? WHERE id = 1",
-                (datetime.now().isoformat(),)
-            )
-            self.repo.conn.commit()
         except Exception as e:
-            # Falha silenciosa
             import logging
-            logging.debug(f"Sync failed: {e}")
+            logging.debug(f"Backend sync failed: {e}")
     
-    def push_queue(self) -> None:
-        """Envia mudanças locais para o backend."""
-        queue = self.repo.conn.execute(
-            "SELECT id, entity_type, entity_id, action, payload FROM sync_queue WHERE synced = 0"
-        ).fetchall()
-        
-        for item in queue:
-            item_id, entity_type, entity_id, action, payload = item
-            
-            try:
-                response = requests.post(
-                    f"{self.config['backend_url']}/api/sync/push",
-                    json={
-                        'entity_type': entity_type,
-                        'entity_id': entity_id,
-                        'action': action,
-                        'payload': json.loads(payload)
-                    },
-                    headers={'Authorization': f"Bearer {self.config['api_key']}"},
-                    timeout=10
-                )
-                
-                if response.ok:
-                    self.repo.conn.execute(
-                        "UPDATE sync_queue SET synced = 1 WHERE id = ?",
-                        (item_id,)
-                    )
-                    self.repo.conn.commit()
-            except:
-                continue
-    
-    def pull_changes(self) -> None:
-        """Puxa mudanças do backend."""
-        try:
-            response = requests.get(
-                f"{self.config['backend_url']}/api/sync/pull",
-                params={'since': self.config.get('last_sync', '1970-01-01')},
-                headers={'Authorization': f"Bearer {self.config['api_key']}"},
-                timeout=10
-            )
-            
-            if response.ok:
-                changes = response.json()
-                self._merge_changes(changes)
-        except:
-            pass
-    
-    def _merge_changes(self, changes: dict) -> None:
-        """Merge mudanças remotas com dados locais."""
-        # Sync playlists
-        for sp in changes.get('sync_playlists', []):
-            self.repo.conn.execute(
-                """INSERT OR REPLACE INTO sync_playlists (id, name, url, synced_at)
-                   VALUES (?, ?, ?, ?)""",
-                (sp['id'], sp['name'], sp['url'], datetime.now().isoformat())
-            )
-        
-        # Tags
-        for tag in changes.get('tags', []):
-            self.repo.conn.execute(
-                """INSERT OR IGNORE INTO tags (id, name)
-                   VALUES (?, ?)""",
-                (tag['id'], tag['name'])
-            )
-        
-        self.repo.conn.commit()
-    
-    def queue_change(self, entity_type: str, entity_id: str, action: str, payload: dict) -> None:
-        """Adiciona mudança à queue de sync."""
-        if not self.is_enabled():
-            return
-        
-        self.repo.conn.execute(
-            """INSERT INTO sync_queue (entity_type, entity_id, action, payload)
-               VALUES (?, ?, ?, ?)""",
-            (entity_type, entity_id, action, json.dumps(payload))
-        )
-        self.repo.conn.commit()
+    # ... implementar _push_queue e _pull_changes ...
 ```
 
 ### **2. Cliente React Native**
@@ -642,14 +609,18 @@ export default router;
 
 ### **Python TUI - Adicionar seção "Config"**
 
+Para adicionar configuração de backend, criar método em `handlers.py`:
+
 ```python
-def handle_config_key(self, key: int) -> None:
+# handlers.py - classe KeyHandlers
+def handle_config_key(self, key: int) -> str:
+    """Handle keys in config section."""
     if key == ord("s"):
-        enabled = self.prompt("Habilitar sync? (s/n): ").lower() == 's'
+        enabled = self.ui.prompt("Habilitar sync com backend? (s/n): ").lower() == 's'
         
         if enabled:
-            backend_url = self.prompt("URL do backend: ")
-            api_key = self.prompt("API Key: ")
+            backend_url = self.ui.prompt("URL do backend: ")
+            api_key = self.ui.prompt("API Key: ")
             
             self.repo.conn.execute(
                 """INSERT OR REPLACE INTO sync_config (id, enabled, backend_url, api_key)
@@ -658,12 +629,26 @@ def handle_config_key(self, key: int) -> None:
             )
             self.repo.conn.commit()
             
-            self.status = "Sync habilitado!"
-            threading.Thread(target=self.sync_manager.try_sync, daemon=True).start()
+            return "Sync com backend habilitado!"
         else:
             self.repo.conn.execute("UPDATE sync_config SET enabled = 0 WHERE id = 1")
             self.repo.conn.commit()
-            self.status = "Sync desabilitado."
+            return "Sync com backend desabilitado."
+    
+    return ""
+```
+
+E adicionar no `src/main.py`:
+
+```python
+# src/main.py - classe PlayerApp
+MENU = ["Músicas", "Playlists", "Tags", "Busca", "Sync URLs", "Sincronizar", "Config", "Sair"]
+
+# No método handle_section_keys:
+elif self.section == 6:  # Config
+    status = self.handlers.handle_config_key(key)
+    if status:
+        self.status = status
 ```
 
 ## 🎯 Checklist de Implementação
@@ -676,11 +661,24 @@ def handle_config_key(self, key: int) -> None:
 - [ ] Deploy em Railway/Render
 
 ### **Fase 2: Python TUI**
-- [x] Adicionar tabelas sync_config e sync_queue
-- [ ] Criar sync_manager.py
-- [ ] Integrar no App.__init__
-- [ ] Adicionar seção Config no menu
-- [ ] Testar sync
+- [x] Adicionar tabelas sync_config e sync_queue (em `src/repository.py`)
+- [x] Criar sync_manager.py (sincronização de playlists YouTube)
+- [x] Integrar no PlayerApp.__init__ (em `src/main.py`)
+- [x] Refatorar código em módulos independentes
+  - [x] `src/config.py` - Constantes e caminhos
+  - [x] `src/models.py` - Dataclasses
+  - [x] `src/repository.py` - Acesso a dados
+  - [x] `src/audio_player.py` - Reprodução de áudio
+  - [x] `src/download_manager.py` - Downloads
+  - [x] `src/sync_manager.py` - Sincronização
+  - [x] `src/ui_renderer.py` - Interface
+  - [x] `src/handlers.py` - Tratamento de teclas
+  - [x] `src/utils.py` - Utilitários
+  - [x] `src/main.py` - Aplicação principal
+- [x] Organizar em estrutura de diretórios (src/, docs/)
+- [ ] Adicionar seção Config no menu (para sync com backend)
+- [ ] Expandir sync_manager.py com sync de backend
+- [ ] Testar sync com backend
 
 ### **Fase 3: React Native**
 - [ ] Configurar SQLite
