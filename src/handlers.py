@@ -1,6 +1,7 @@
 """Key handlers for different sections of the application."""
 
 import sqlite3
+import subprocess
 from typing import Optional
 
 from src.models import Music, Playlist, Tag, SyncPlaylist
@@ -53,6 +54,31 @@ class KeyHandlers:
                 return "Tag não encontrada.", None
             self.repo.remove_tag_from_music(music.id, tag.id)
             return f"Tag '{tag_name}' removida.", None
+        elif key == ord("y"):
+            if not music:
+                return "Selecione uma música.", None
+            if not music.url:
+                return "Esta música não tem URL.", None
+            try:
+                # Tentar copiar para clipboard usando xclip, xsel ou wl-copy
+                clipboard_cmd = None
+                if subprocess.run(["which", "xclip"], capture_output=True).returncode == 0:
+                    clipboard_cmd = ["xclip", "-selection", "clipboard"]
+                elif subprocess.run(["which", "xsel"], capture_output=True).returncode == 0:
+                    clipboard_cmd = ["xsel", "--clipboard", "--input"]
+                elif subprocess.run(["which", "wl-copy"], capture_output=True).returncode == 0:
+                    clipboard_cmd = ["wl-copy"]
+                elif subprocess.run(["which", "pbcopy"], capture_output=True).returncode == 0:
+                    # macOS
+                    clipboard_cmd = ["pbcopy"]
+                
+                if clipboard_cmd:
+                    subprocess.run(clipboard_cmd, input=music.url.encode(), check=True)
+                    return f"URL copiada: {music.url[:50]}...", None
+                else:
+                    return f"Clipboard não disponível. URL: {music.url}", None
+            except Exception as e:
+                return f"Erro ao copiar: {str(e)}", None
         
         return "", None
 

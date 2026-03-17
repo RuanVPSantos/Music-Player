@@ -106,6 +106,7 @@ O script oferece opção de backup antes de remover.
 - `↑↓` ou `j/k` - Navegar
 - `←→` ou `h/l` - Mudar seção
 - `Enter` - Tocar música
+- `Y` - Copiar URL da música para clipboard
 - `P` - Pausar/Retomar
 - `N/B` - Próxima/Anterior
 - `+/-` - Volume

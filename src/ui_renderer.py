@@ -166,7 +166,7 @@ class UIRenderer:
         elif section == 4:
             help_text = "↑↓: navegar  C: criar  E: editar  D: deletar  Q: sair"
         else:
-            help_text = "↑↓: navegar  []: reordenar  /: busca  V: thumb  A: auto  R: shuffle  S: sync  P/N/B: player  +/-: vol  <>.: seek  Q: sair"
+            help_text = "↑↓: navegar  []: reordenar  /: busca  Y: copiar URL  V: thumb  A: auto  R: shuffle  S: sync  P/N/B: player  +/-: vol  <>.: seek  Q: sair"
         
         self.stdscr.addstr(y, 4, help_text[:w - 8], curses.color_pair(6) | curses.A_DIM)
 
